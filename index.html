@@ -186,7 +186,7 @@ const svgI=k=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 function render(){
  if(!S.user)return renderLogin();
  const tabs=[['home','Home'],['add','New'],['list','Records'],['dash','Dashboard'],['set','Settings']];
- $('#app').innerHTML=`<header><img src="${LOGO_SRC}" alt=""><div class="t">Line Breakdown</div><div class="u">${esc(S.user.name)}<br><span id="syncst">${Sync.label()}</span></div></header><main id="main"></main>
+ $('#app').innerHTML=`<header><img src="${LOGO_SRC}" alt=""><div class="t">Line Breakdown</div><div class="u" onclick="S.tab='set';render()" style="cursor:pointer">${esc(S.user.name)}<br><span id="syncst">${Sync.label()}</span></div></header><main id="main"></main>
  <nav>${tabs.map(([k,l])=>`<button class="${S.tab===k?'on':''}" data-tab="${k}">${svgI(k)}${l}</button>`).join('')}</nav>`;
  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{if(b.dataset.tab==='add')S.edit=newRecord('breakdown');S.tab=b.dataset.tab;render();scrollTo(0,0)});
  ({home:renderHome,add:renderForm,list:renderList,dash:renderDash,set:renderSettings})[S.tab]()}
@@ -421,7 +421,7 @@ function renderSettings(){const st=S.settings;
  <div class="small" style="margin-top:8px">Status: ${esc(Sync.status)}</div></div>
  ${isAdmin()?`<div class="card"><h2>Lists</h2><div class="small">${Object.keys(S.machines).length} areas · ${Object.values(S.machines).flat().length} equipment · ${S.users.length} users. Lists are loaded from the Excel data file when sync is on.</div></div>`:''}
  <div class="card"><h2>Install on your phone</h2><div class="small">Android (Chrome): menu ⋮ → <b>Add to Home screen / Install app</b>. iPhone (Safari): Share → <b>Add to Home Screen</b>.</div></div>
- <div class="small" style="text-align:center">Line Breakdown v1.2 · Osoul</div>`;
+ <div class="small" style="text-align:center">Line Breakdown v1.4 · Osoul</div>`;
  $('#lo').onclick=async()=>{await DB.del('meta','me');S.user=null;render()};
  if($('#sv'))$('#sv').onclick=async()=>{S.settings={clientId:$('#cid').value.trim(),tenantId:$('#tid').value.trim(),fileLink:$('#xf').value.trim(),folderLink:$('#mf').value.trim()};await DB.put('meta','settings',S.settings);Sync.msal=null;toast('Saved');renderSettings()};
  $('#sn').onclick=()=>Sync.run(true)}
@@ -430,13 +430,13 @@ function renderSettings(){const st=S.settings;
 const REC_COLS=['ID','ProdDayID','Kind','Type','Area','Equipment','Description','Start','End','DurationMin','Status','ReportedBy','ClosedBy','RootCause','Action','Notes','Photos','Videos','UpdatedAt','StartMs','EndMs','Line'];
 const DAY_COLS=['ID','Start','End','Hours','StartedBy','EndedBy','Chickens','UpdatedAt','StartMs','EndMs'];
 const Sync={status:'Not connected',account:null,msal:null,t:null,busy:false,
- label(){const n=S.records.filter(r=>!r.synced).length+S.days.filter(d=>!d.synced).length;return this.account?(n?n+' to sync':'✓ synced'):(n?n+' saved on phone':'offline mode')},
+ label(){const n=S.records.filter(r=>!r.synced).length+S.days.filter(d=>!d.synced).length;if(this.status.startsWith('Sync error'))return '⚠ sync error'+(n?' · '+n+' waiting':'');if(this.status==='Sign-in needed')return '⚠ sign-in needed';return this.account?(n?n+' to sync':'✓ synced'):(n?n+' saved on phone':'offline mode')},
  soon(){clearTimeout(this.t);this.t=setTimeout(()=>this.run(false),1500);const e=$('#syncst');if(e)e.textContent=this.label()},
  async queueDelete(id){const q=(await DB.get('meta','deletes'))||[];q.push(id);await DB.put('meta','deletes',q)},
  async init(){const st=S.settings;if(!st.clientId)return false;if(!window.msal){for(const u of ['https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js','https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js']){try{await loadScript(u)}catch(e){}if(window.msal)break}if(!window.msal)throw new Error('Could not load the Microsoft sign-in library. Check the internet connection and try again.')}
   if(!this.msal){this.msal=new msal.PublicClientApplication({auth:{clientId:st.clientId,authority:'https://login.microsoftonline.com/'+(st.tenantId||'organizations'),redirectUri:location.origin+location.pathname},cache:{cacheLocation:'localStorage'}});if(this.msal.initialize)await this.msal.initialize();await this.msal.handleRedirectPromise().catch(()=>{})}
   this.account=this.msal.getAllAccounts()[0]||null;return true},
- async token(interactive){const sc={scopes:['Files.ReadWrite.All','Sites.ReadWrite.All']};
+ async token(interactive){const sc={scopes:['Files.ReadWrite.All']};
   if(!this.account){if(!interactive)return null;const r=await this.msal.loginPopup(sc);this.account=r.account}
   try{return (await this.msal.acquireTokenSilent({...sc,account:this.account})).accessToken}catch(e){if(!interactive)return null;return (await this.msal.acquireTokenPopup(sc)).accessToken}},
  async g(tok,method,url,body,raw){const r=await fetch(url.startsWith('http')?url:'https://graph.microsoft.com/v1.0'+url,{method,headers:{Authorization:'Bearer '+tok,...(raw?{}:{'Content-Type':'application/json'})},body:raw?body:body&&JSON.stringify(body)});if(!r.ok)throw new Error(method+' '+url.split('?')[0]+' → '+r.status+' '+(await r.text()).slice(0,160));return r.status===204?null:r.json()},
@@ -456,7 +456,7 @@ const Sync={status:'Not connected',account:null,msal:null,t:null,busy:false,
    // read remote tables
    const ids=async t=>((await this.g(tok,'GET',`${base}/tables/${t}/columns/ID/range?$select=values`)).values||[]).slice(1).map(v=>String(v[0]));
    const upsert=async(t,id,vals)=>{const list=await ids(t);const i=list.indexOf(id);if(i<0)await this.g(tok,'POST',`${base}/tables/${t}/rows`,{values:[vals]});else await this.g(tok,'PATCH',`${base}/tables/${t}/rows/itemAt(index=${i})`,{values:[vals]})};
-   const dels=(await DB.get('meta','deletes'))||[];for(const id of dels){const l=await ids('Records');const i=l.indexOf(id);if(i>=0)await this.g(tok,'POST',`${base}/tables/Records/rows/itemAt(index=${i})/delete`)}await DB.put('meta','deletes',[]);
+   const dels=(await DB.get('meta','deletes'))||[];const left=[];for(const id of dels){try{const l=await ids('Records');const i=l.indexOf(id);if(i>=0)await this.g(tok,'DELETE',`${base}/tables/Records/rows/itemAt(index=${i})`)}catch(e){console.warn('delete failed',id,e);left.push(id)}}await DB.put('meta','deletes',left.length>20?[]:left);
    for(const d of S.days.filter(x=>!x.synced)){await upsert('ProductionDays',d.id,[d.id,fmtFull(d.start),fmtFull(d.end),d.end?+((d.end-d.start)/36e5).toFixed(2):'',d.startedBy,d.endedBy||'',d.chickens||'',d.updatedAt,d.start,d.end||'']);d.synced=true;await DB.put('days',d.id,d)}
    for(const r of S.records.filter(x=>!x.synced)){const urls=async a=>(await Promise.all(a.map(id=>DB.get('media',id)))).map(m=>m&&m.url).filter(Boolean).join(' ');
     await upsert('Records',r.id,[r.id,r.dayId||'',KIND_LABEL[r.kind],r.category,r.area,r.equipment,r.description,fmtFull(r.start),fmtFull(r.end),r.end?mins(r.end-r.start):'',r.end?'Closed':'Open',r.reportedBy,r.closedBy||'',r.rootCause,r.action,r.notes,await urls(r.photos),await urls(r.videos),r.updatedAt,r.start,r.end||'',r.kind==='breakdown'?(r.line||'Primary'):'']);r.synced=true;await DB.put('records',r.id,r)}
