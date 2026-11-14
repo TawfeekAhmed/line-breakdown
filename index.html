@@ -421,7 +421,7 @@ function renderSettings(){const st=S.settings;
  <div class="small" style="margin-top:8px">Status: ${esc(Sync.status)}</div></div>
  ${isAdmin()?`<div class="card"><h2>Lists</h2><div class="small">${Object.keys(S.machines).length} areas · ${Object.values(S.machines).flat().length} equipment · ${S.users.length} users. Lists are loaded from the Excel data file when sync is on.</div></div>`:''}
  <div class="card"><h2>Install on your phone</h2><div class="small">Android (Chrome): menu ⋮ → <b>Add to Home screen / Install app</b>. iPhone (Safari): Share → <b>Add to Home Screen</b>.</div></div>
- <div class="small" style="text-align:center">Line Breakdown v1.4 · Osoul</div>`;
+ <div class="small" style="text-align:center">Line Breakdown v1.5 · Osoul</div>`;
  $('#lo').onclick=async()=>{await DB.del('meta','me');S.user=null;render()};
  if($('#sv'))$('#sv').onclick=async()=>{S.settings={clientId:$('#cid').value.trim(),tenantId:$('#tid').value.trim(),fileLink:$('#xf').value.trim(),folderLink:$('#mf').value.trim()};await DB.put('meta','settings',S.settings);Sync.msal=null;toast('Saved');renderSettings()};
  $('#sn').onclick=()=>Sync.run(true)}
@@ -439,19 +439,19 @@ const Sync={status:'Not connected',account:null,msal:null,t:null,busy:false,
  async token(interactive){const sc={scopes:['Files.ReadWrite.All']};
   if(!this.account){if(!interactive)return null;const r=await this.msal.loginPopup(sc);this.account=r.account}
   try{return (await this.msal.acquireTokenSilent({...sc,account:this.account})).accessToken}catch(e){if(!interactive)return null;return (await this.msal.acquireTokenPopup(sc)).accessToken}},
- async g(tok,method,url,body,raw){const r=await fetch(url.startsWith('http')?url:'https://graph.microsoft.com/v1.0'+url,{method,headers:{Authorization:'Bearer '+tok,...(raw?{}:{'Content-Type':'application/json'})},body:raw?body:body&&JSON.stringify(body)});if(!r.ok)throw new Error(method+' '+url.split('?')[0]+' → '+r.status+' '+(await r.text()).slice(0,160));return r.status===204?null:r.json()},
+ async g(tok,method,url,body,raw){this.step=method+' '+url.split('?')[0].replace(/\/drives\/[^/]+\/items\/[^/:]+/,'/…').slice(0,90);const r=await fetch(url.startsWith('http')?url:'https://graph.microsoft.com/v1.0'+url,{method,headers:{Authorization:'Bearer '+tok,...(raw?{}:{'Content-Type':'application/json'})},body:raw?body:body&&JSON.stringify(body)});if(!r.ok)throw new Error(method+' '+url.split('?')[0]+' → '+r.status+' '+(await r.text()).slice(0,160));return r.status===204?null:r.json()},
  share(link){return 'u!'+btoa(unescape(encodeURIComponent(link))).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-')},
  async run(interactive){if(this.busy||!navigator.onLine)return;if(!(await this.init().catch(e=>{this.status=e.message})))return;this.busy=true;
   try{const tok=await this.token(interactive);if(!tok){this.status='Sign-in needed';return}
    const st=S.settings;const fi=await this.g(tok,'GET',`/shares/${this.share(st.fileLink)}/driveItem`);const base=`/drives/${fi.parentReference.driveId}/items/${fi.id}/workbook`;
    let fo=null;if(st.folderLink)fo=await this.g(tok,'GET',`/shares/${this.share(st.folderLink)}/driveItem`);
    // upload media
-   for(const r of S.records)for(const id of [...r.photos,...r.videos]){const m=await DB.get('media',id);if(!m||m.synced||!fo||!m.blob)continue;
+   for(const r of S.records)for(const id of [...r.photos,...r.videos]){const m=await DB.get('media',id);if(!m||m.synced||!fo||!m.blob)continue;try{
      const name=`${r.id}_${id}.${m.type==='image'?'jpg':(m.name||'v.mp4').split('.').pop()}`;let it;
      if(m.blob.size<4e6)it=await this.g(tok,'PUT',`/drives/${fo.parentReference.driveId}/items/${fo.id}:/${encodeURIComponent(name)}:/content`,m.blob,true);
      else{const ses=await this.g(tok,'POST',`/drives/${fo.parentReference.driveId}/items/${fo.id}:/${encodeURIComponent(name)}:/createUploadSession`,{item:{'@microsoft.graph.conflictBehavior':'replace'}});const CH=5*327680;
       for(let o=0;o<m.blob.size;o+=CH){const part=m.blob.slice(o,o+CH);const rr=await fetch(ses.uploadUrl,{method:'PUT',headers:{'Content-Range':`bytes ${o}-${o+part.size-1}/${m.blob.size}`},body:part});if(!rr.ok&&rr.status!==202)throw new Error('Video upload failed '+rr.status);if(rr.status===200||rr.status===201)it=await rr.json()}}
-     m.url=it&&it.webUrl;m.synced=true;await DB.put('media',id,m);r.synced=false;await DB.put('records',r.id,r)}
+     m.url=it&&it.webUrl;m.synced=true;await DB.put('media',id,m);r.synced=false;await DB.put('records',r.id,r)}catch(e){console.warn('media upload failed',e);this.mediaErr=(this.step||'')+' '+e.message}}
    await load();
    // read remote tables
    const ids=async t=>((await this.g(tok,'GET',`${base}/tables/${t}/columns/ID/range?$select=values`)).values||[]).slice(1).map(v=>String(v[0]));
@@ -473,8 +473,8 @@ const Sync={status:'Not connected',account:null,msal:null,t:null,busy:false,
    // lists
    try{const mrows=await rows('Machines');if(mrows.length){const m={},sec=[];mrows.forEach(([a,b,l])=>{if(!a)return;a=String(a);if(String(l||'').toLowerCase().startsWith('sec')){if(!sec.includes(a))sec.push(a)}else if(b)(m[a]=m[a]||[]).push(String(b))});S.machines=m;S.secondary=sec;await DB.put('meta','machines',m);await DB.put('meta','secondary',sec)}
     const urows=await rows('Users');if(urows.length){S.users=urows.filter(x=>x[0]).map(([n,j,r,em,p])=>({name:String(n),job:String(j||''),admin:String(r||'').toLowerCase().startsWith('admin'),pinHash:p!==''&&p!=null?pinHash(n,String(p).padStart(4,'0')):''}));await DB.put('meta','users',S.users);if(S.user){const me=S.users.find(u=>u.name===S.user.name);if(me)S.user=me}}}catch(e){}
-   this.status='Last sync '+fmtDT(Date.now());await load();if(S.tab!=='add')render()}
-  catch(e){this.status='Sync error: '+e.message;console.warn(e)}finally{this.busy=false;const el=$('#syncst');if(el)el.textContent=this.label()}}};
+   this.status='Last sync '+fmtDT(Date.now())+(this.mediaErr?' · photo upload problem: '+this.mediaErr:'');this.mediaErr='';await load();if(S.tab!=='add')render()}
+  catch(e){this.status='Sync error: '+e.message+(e.message==='Failed to fetch'||e.message.includes('NetworkError')?' (no answer from Microsoft at step: '+(this.step||'?')+')':'');console.warn(e)}finally{this.busy=false;const el=$('#syncst');if(el)el.textContent=this.label()}}};
 
 /* ---------- start ---------- */
 (async()=>{if(window.opener&&window.opener!==window&&/[#&?](code|error)=/.test(location.hash+location.search)){document.getElementById('app').innerHTML='<div class="login"><h2>Signing in…</h2></div>';return}
